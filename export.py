@@ -24,6 +24,9 @@ if platform == 'win32':
 
 elif platform == 'darwin':
     signal_path = Path('~/Library/Application Support/Signal').expanduser()
+    photos_path = Path('dummy_icloud_path')
+    if not photos_path.exists():
+        photos_path.mkdir()
 
 elif platform == 'linux': # ie. WSL
     predecrypt = True
@@ -50,7 +53,7 @@ for f in output_folder.iterdir():
     f.unlink()
 
 def tagify(value):
-    return unicodedata.normalize('NFKD', value)
+    return unicodedata.normalize('NFKD', value).replace(',', '')
 
 def slugify(value, allow_unicode=False):
     """
@@ -157,19 +160,23 @@ for payload, user, user_fallback, conversation, label, timestamp in progressbar.
             if label:
                 description += f': {label}'
 
+            tags = user, 'Signal'
+            if conversation != user:
+                tags += tagify(conversation),
+
             exif = img.read_exif()
             iptc = img.read_iptc()
             exif['Exif.Photo.DateTimeOriginal'] = date.strftime('%Y:%m:%d %H:%M:%S')
             exif['Exif.Image.Model'] = 'Signal Export'
             exif['Exif.Image.Artist'] = user
             exif['Exif.Image.ImageDescription'] = description
-            tags = user, 'Signal'
-            if conversation != user:
-                tags += tagify(conversation),
+            iptc['Iptc.Application2.Caption'] = description
             iptc['Iptc.Application2.Keywords'] = tags
+            iptc['Iptc.Envelope.CharacterSet'] = '\x1b%G'
+
             img.modify_iptc(iptc)
             img.modify_exif(exif)
-            move(target, photos_path)
+            move(str(target), str(photos_path))
 
 db_path.unlink()
 db_decrypted.unlink()
