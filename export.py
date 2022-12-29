@@ -16,6 +16,7 @@ import pyfiglet
 SQLCIPHER_BIN = '/usr/local/bin/sqlcipher'
 
 pyfiglet.print_figlet('Signal Bildexport', font='smscript')
+print(flush=True)
 
 predecrypt = False
 if platform == 'win32':
@@ -179,7 +180,8 @@ for payload, user, user_fallback, conversation, label, timestamp in progressbar.
             move(str(target), str(photos_path))
 
 db_path.unlink()
-db_decrypted.unlink()
+if db_decrypted.exists():
+    db_decrypted.unlink()
 
 with open(previous_run, 'w') as f:
     f.write(str(most_recent_message))
