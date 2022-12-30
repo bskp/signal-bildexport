@@ -6,12 +6,12 @@ import datetime as dt
 from shutil import copyfile, move
 from pyexiv2 import Image
 import progressbar
-from sys import platform
 import os
 import sqlite3
 import unicodedata
 import re
 import pyfiglet
+from sys import platform
 
 import config
 
@@ -21,9 +21,7 @@ pyfiglet.print_figlet('Signal Bildexport', font='smscript')
 print(flush=True)
 
 signal_path = Path(config.get('x-advanced.signal_path'))
-photos_path = Path(config.get('output_path'))
-if not photos_path.exists():
-    photos_path.mkdir()
+win_icloud_photos_path = Path(config.get('output_path'))
 
 db_path = signal_path / 'sql/db.sqlite'
 attachments_path = signal_path / 'attachments.noindex'
@@ -148,7 +146,7 @@ for payload, user, user_fallback, conversation, label, timestamp in progressbar.
 
         target = tmp_folder / (filename + '.jpg')
 
-        if (photos_path / target.name).exists():
+        if platform == 'linux' and (win_icloud_photos_path / target.name).exists():
             count_present += 1
             continue
 
@@ -178,7 +176,21 @@ for payload, user, user_fallback, conversation, label, timestamp in progressbar.
 
             img.modify_iptc(iptc)
             img.modify_exif(exif)
-            move(str(target), str(photos_path))
+
+print('Export complete.')
+
+if count_copied > 0:
+    if platform == 'darwin':
+        print('Press Enter to force-quit Photos.app, if running, and trigger the import...')
+        input()
+        os.system('killall Photos')
+        command = 'open /System/Applications/Photos.app --args ' + (" ".join([str(img.absolute()) for img in tmp_folder.iterdir()]))
+        os.system(command)
+
+    elif platform == 'linux':
+        for img in tmp_folder.iterdir():
+            move(str(img), str(win_icloud_photos_path))
+
 
 config.config['last_run'] = most_recent_message
 config.save()
