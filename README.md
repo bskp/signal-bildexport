@@ -34,7 +34,35 @@ Since the images cannot be saved directly from Android/iOS, this script **export
    - Name of the Chat group
    - The message that came with it as the image's title
 
-Installation on Windows
+## Usage
+
+~~~~bash
+cd signal-bildexport
+python export.py
+~~~~
+
+On the first run, `config.yaml` will be created. The defaults should be fine, but it allows you to restrict which photos should be exported:
+
+~~~~yaml
+import_photos_from_messages:
+  any_with_my_reaction: ['🤩'] # only export images for which your reaction was 🤩
+  in_conversation:
+    exclude: [] # Add conversations from which you don't want to import anyting (work?)
+    include:
+    - '*' # feel free to move the '*' to 'exclude' and specify only the desired chats here
+last_run: 0 # epoch timestamp of last run. Set to 0 to trigger a full export
+output_path: images # output path for the images (different for Mac and Windows)
+x-advanced:
+  pre_copy: false
+  pre_decrypt: false
+  signal_path: /Users/matthiasroggo/Library/Application Support/Signal
+  sqlcipher_bin: ./sqlcipher/bin/sqlcipher # Only required if pre_decrypt = True (Windows)
+
+~~~~
+
+
+
+Installation on Windows using WSL
 -------
 
 #### Prerequisites
