@@ -13,44 +13,29 @@ import unicodedata
 import re
 import pyfiglet
 
-SQLCIPHER_BIN = '/usr/local/bin/sqlcipher'
+import config
+
+first_run = config.load()
 
 pyfiglet.print_figlet('Signal Bildexport', font='smscript')
 print(flush=True)
 
-predecrypt = False
-if platform == 'win32':
-    predecrypt = True
-    signal_path = Path('~/AppData/Roaming/Signal').expanduser()
+signal_path = Path(config.get('x-advanced.signal_path'))
+photos_path = Path(config.get('output_path'))
+if not photos_path.exists():
+    photos_path.mkdir()
 
-elif platform == 'darwin':
-    signal_path = Path('~/Library/Application Support/Signal').expanduser()
-    photos_path = Path('dummy_icloud_path')
-    if not photos_path.exists():
-        photos_path.mkdir()
-
-elif platform == 'linux': # ie. WSL
-    predecrypt = True
-    parts = Path.cwd().parts
-    userdir_parts = parts[0:parts.index('Users') + 2]
-    userdir = Path(*userdir_parts)
-    signal_path = userdir / 'AppData/Roaming/Signal'
-    photos_path = userdir / 'Pictures/iCloud Photos/Photos'
-
-else:
-    raise NotImplementedError('Platform is not supported:', platform)
-
-db_path_origin = signal_path / 'sql/db.sqlite'
-config_path = signal_path / 'config.json'
+db_path = signal_path / 'sql/db.sqlite'
 attachments_path = signal_path / 'attachments.noindex'
-previous_run = Path('previous_run')
 
-db_path = Path.cwd() / 'db.sqlite'
-copyfile(db_path_origin, db_path)
+if config.get('x-advanced.pre_copy'):
+    db_path_ = Path('db.sqlite')
+    copyfile(db_path, db_path_)
+    db_path = db_path_
 
-output_folder = Path.cwd() / 'out'
-if not output_folder.exists(): output_folder.mkdir()
-for f in output_folder.iterdir():
+tmp_folder = Path('tmp')
+if not tmp_folder.exists(): tmp_folder.mkdir()
+for f in tmp_folder.iterdir():
     f.unlink()
 
 def tagify(value):
@@ -72,11 +57,13 @@ def slugify(value, allow_unicode=False):
     value = re.sub(r'[^\w\s-]', '', value)
     return re.sub(r'[-\s]+', '-', value).strip('-_')
 
-with open(config_path) as f:
+# Read DB key and prepare decryption
+with open(signal_path / 'config.json') as f:
     key = json.load(f)['key']
 
-db_decrypted = Path.cwd() / 'db-decrypt.sqlite'
-if predecrypt:
+if config.get('x-advanced.pre_decrypt'):
+    db_decrypted = Path('db-decrypt.sqlite')
+    sqlcipher = config('x-advanced.sqlcipher_bin')
     print(f"Decrypting Signal DB...")
     if db_decrypted.exists():
         db_decrypted.unlink()
@@ -86,7 +73,7 @@ if predecrypt:
         f"ATTACH DATABASE '{db_decrypted}' AS plaintext KEY '';"
         f"SELECT sqlcipher_export('plaintext');"
         f"DETACH DATABASE plaintext;"
-        f'" | {SQLCIPHER_BIN} {db_path}'
+        f'" | {sqlcipher} {db_path}'
     )
     bar = progressbar.ProgressBar(max_value=progressbar.UnknownLength, redirect_stdout=True)
     bar.update()
@@ -97,6 +84,7 @@ if predecrypt:
     bar.finish()
     db = sqlite3.connect(str(db_decrypted))
     c = db.cursor()
+
 else: 
     from pysqlcipher3 import dbapi2 as sqlcipher
     db = sqlcipher.connect(str(db_path))
@@ -108,20 +96,33 @@ else:
     c.execute("PRAGMA cipher_hmac_algorithm = HMAC_SHA512")
     c.execute("PRAGMA cipher_kdf_algorithm = PBKDF2_HMAC_SHA512")
 
-previous_export_timestamp = 0
-if previous_run.exists():
-    with open(previous_run) as f:
-        previous_export_timestamp = int(f.readline())
+previous_export_timestamp = int(config.get('last_run'))
+
+# Sqlite query
+since = dt.datetime.fromtimestamp(previous_export_timestamp/1000).strftime('%Y-%m-%d')
+print(f'Querying Signal DB for new images since {since}... ')
 
 query = "SELECT m.json, u.name as user, u.profileFullName as userFallback, c.name as conversation, m.body as label, m.sent_at " \
 + "FROM messages m " \
 + "JOIN conversations u ON m.source = u.e164 " \
 + "JOIN conversations c ON m.conversationId = c.id " \
++ "JOIN reactions r ON m.id = r.messageId " \
 + "WHERE m.hasVisualMediaAttachments = 1 AND m.type = 'incoming'" \
 + f"AND m.received_at > {previous_export_timestamp}" 
 
-since = dt.datetime.fromtimestamp(previous_export_timestamp/1000).strftime('%Y-%m-%d')
-print(f'Querying Signal DB for new images since {since}... ', end='', flush=True)
+reactions = config.get('import_photos_from_messages.any_with_my_reaction')
+if reactions:
+    # Get the users conversation ID
+    user_id = json.loads(c.execute("select json from items where id = 'uuid_id'").fetchone()[0])['value'].rpartition('.')[0]
+    user_convo_id = c.execute(f"select id from conversations where uuid = '{user_id}'").fetchone()[0]
+
+    # add filter to messages-query
+    if '*' in reactions:
+        query += f" AND r.fromId = '{user_convo_id}'"
+    else: 
+        reaction_list = "','".join(reactions)
+        query += f" AND r.fromId = '{user_convo_id}' AND r.emoji IN ('{reaction_list}')"
+
 c.execute(query)
 rows = c.fetchall()
 print('done.')
@@ -145,7 +146,7 @@ for payload, user, user_fallback, conversation, label, timestamp in progressbar.
         if len(attachments) > 1:
             filename += f'_{index + 1}'
 
-        target = output_folder / (filename + '.jpg')
+        target = tmp_folder / (filename + '.jpg')
 
         if (photos_path / target.name).exists():
             count_present += 1
@@ -179,14 +180,10 @@ for payload, user, user_fallback, conversation, label, timestamp in progressbar.
             img.modify_exif(exif)
             move(str(target), str(photos_path))
 
-db_path.unlink()
-if db_decrypted.exists():
-    db_decrypted.unlink()
-
-with open(previous_run, 'w') as f:
-    f.write(str(most_recent_message))
+config.config['last_run'] = most_recent_message
+config.save()
 
 print(f'New images since {since}: {count_copied}')
-print(f'Images already in iCloud folder: {count_present}')
+print(f'Images already in output folder: {count_present}')
 print('Press enter to close.')
 input()

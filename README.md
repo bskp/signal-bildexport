@@ -66,6 +66,7 @@ make && sudo make install
 #### Prerequisites
 
 - Signal Desktop is installed and configured (and some Photos have been received already)
+- [Homebrew](https://brew.sh) is installed
 
 #### Terminal (zsh or bash)
 
@@ -78,4 +79,4 @@ pip install pysqlcipher3
 Remarks
 ----
 
-While getting `pysqlcipher3` to work was a walk in the park on Mac, it almost got me quitting on Windows. Big thanks to [Chris Arderne](https://github.com/carderne) for his fantastic write-up on solving this for his [signal-export](https://github.com/carderne/signal-export), where the pre-decrypt approach is taken from!
+While getting `pysqlcipher3` to work was a walk in the park on Mac, it almost got me quitting on Windows. Big thanks to [Chris Arderne](https://github.com/carderne) for his fantastic write-up on solving this for [signal-export](https://github.com/carderne/signal-export), where the pre-decrypt approach is taken from!
