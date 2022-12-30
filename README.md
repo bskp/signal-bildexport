@@ -6,7 +6,7 @@
        (|                                       (|
 ~~~~
 
-![demo](/Users/matthiasroggo/Code/bilderflut/demo.jpeg)
+![demo](demo.jpeg)
 
 ## Why «Signal Bildexport» had to be done
 
