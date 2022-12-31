@@ -37,7 +37,7 @@ Since the images cannot be saved directly from Android/iOS, this script **export
 ## Usage
 
 ~~~~bash
-cd signal-bildexport
+cd signal-bildexport/
 python export.py
 ~~~~
 
@@ -79,14 +79,24 @@ wsl --install
 #### Bash
 
 ~~~~bash
+# Install pip
 sudo apt-get update  
 apt-get install python3-pip  
-pip install -r requirements.txt
+
+# Clone repo
+git clone https://github.com/bskp/signal-bildexport.git
+cd signal-bildexport/
+
+# Build sqlcipher
 sudo apt install libsqlite3-dev tclsh libssl-dev
 git clone https://github.com/sqlcipher/sqlcipher.git
-cd sqlcipher
+cd sqlcipher/
 ./configure --enable-tempstore=yes CFLAGS="-DSQLITE_HAS_CODEC" LDFLAGS="-lcrypto -lsqlite3"
-make && sudo make install
+make
+
+# Install required python modules
+cd ..
+pip install -r requirements.txt
 ~~~~
 
 ## Installation on Mac
@@ -99,12 +109,24 @@ make && sudo make install
 #### Terminal (zsh or bash)
 
 ~~~~bash
-pip install -r requirements.txt
+# Clone repo
+git clone https://github.com/bskp/signal-bildexport.git
+cd signal-bildexport/
+
+# Install sqlcipher
 brew install sqlcipher
+
+# Install required python modules
+pip install -r requirements.txt
 pip install pysqlcipher3
 ~~~~
 
-Remarks
+Known Issues
+-----
+
+- [ ] Mac: Launching Photos.app with the exported images as parameters fails sometimes and imports nothing. Drag-and-dropping the images on the app icon, however, will work as an easy fix for now
+
+Thanks
 ----
 
 While getting `pysqlcipher3` to work was a walk in the park on Mac, it almost got me quitting on Windows. Big thanks to [Chris Arderne](https://github.com/carderne) for his fantastic write-up on solving this for [signal-export](https://github.com/carderne/signal-export), where the pre-decrypt approach is taken from!
