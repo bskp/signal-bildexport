@@ -198,11 +198,8 @@ print('Export complete.')
 
 if count_copied > 0:
     if platform == 'darwin':
-        print('Press Enter to force-quit Photos.app, if running, and trigger the import...')
-        input()
-        os.system('killall Photos')
-        command = 'open /System/Applications/Photos.app --args ' + (" ".join([str(img.absolute()) for img in tmp_folder.iterdir()]))
-        os.system(command)
+        print()
+        print('Please drag the tmp-folder on Photos\'s app icon to trigger the import.')
 
     elif platform == 'linux':
         for img in tmp_folder.iterdir():

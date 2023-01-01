@@ -124,11 +124,6 @@ pip install -r requirements.txt
 pip install pysqlcipher3
 ~~~~
 
-Known Issues
------
-
-- [ ] Mac: Launching Photos.app with the exported images as parameters fails sometimes and imports nothing. Drag-and-dropping the images on the app icon, however, will work as an easy fix for now
-
 Thanks
 ----
 
