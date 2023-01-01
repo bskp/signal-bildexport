@@ -97,17 +97,23 @@ else:
 previous_export_timestamp = int(config.get('last_run'))
 
 # Sqlite query
+
+# List all conversation names
+rows = c.execute('select ifnull(name, profileFullName) from conversations order by active_at desc limit 50').fetchall()
+config.conversation_list([row[0] for row in rows])
+
 since = dt.datetime.fromtimestamp(previous_export_timestamp/1000).strftime('%Y-%m-%d')
 print(f'Querying Signal DB for new images since {since}... ')
 
-query = "SELECT m.json, u.name as user, u.profileFullName as userFallback, c.name as conversation, m.body as label, m.sent_at " \
+query = "SELECT m.json, ifnull(u.name, u.profileFullName) as user, c.name as conversation, m.body as label, m.sent_at " \
 + "FROM messages m " \
 + "JOIN conversations u ON m.source = u.e164 " \
 + "JOIN conversations c ON m.conversationId = c.id " \
-+ "JOIN reactions r ON m.id = r.messageId " \
-+ "WHERE m.hasVisualMediaAttachments = 1 AND m.type = 'incoming'" \
++ "LEFT JOIN reactions r ON m.id = r.messageId " \
++ "WHERE m.hasVisualMediaAttachments = 1 AND m.type = 'incoming' " \
 + f"AND m.received_at > {previous_export_timestamp}" 
 
+# Filter by reactions
 reactions = config.get('import_photos_from_messages.any_with_my_reaction')
 if reactions:
     # Get the users conversation ID
@@ -121,6 +127,18 @@ if reactions:
         reaction_list = "','".join(reactions)
         query += f" AND r.fromId = '{user_convo_id}' AND r.emoji IN ('{reaction_list}')"
 
+# Filter by conversations
+convo_include = config.get('import_photos_from_messages.in_conversation.include')
+convo_exclude = config.get('import_photos_from_messages.in_conversation.exclude')
+
+if '*' in convo_include and convo_exclude:
+    exclude_list = "','".join(convo_exclude)
+    query += f" AND c.name NOT IN ('{exclude_list}')"
+
+elif '*' in convo_exclude and convo_include:
+    include_list = "','".join(convo_include)
+    query += f" AND c.name IN ('{include_list}')"
+
 c.execute(query)
 rows = c.fetchall()
 print('done.')
@@ -129,10 +147,9 @@ most_recent_message = previous_export_timestamp
 
 count_copied = 0
 count_present = 0
-for payload, user, user_fallback, conversation, label, timestamp in progressbar.progressbar(rows):
+for payload, user, conversation, label, timestamp in progressbar.progressbar(rows):
     most_recent_message = max(most_recent_message, timestamp)
     attachments = json.loads(payload)['attachments']
-    if user is None: user = user_fallback
     for index, attachment in enumerate(attachments):
         if not 'path' in attachment:
             continue

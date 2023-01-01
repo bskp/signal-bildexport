@@ -4,8 +4,8 @@ from pathlib import Path
 from os import linesep
 from sys import platform
 
-
 config_yaml = Path('config.yaml')
+most_recent_conversations = []
 
 def defaults():
     pre_decrypt = False
@@ -66,6 +66,13 @@ def save():
         f.write(header + linesep)
         yaml.safe_dump(config, f, allow_unicode=True)
 
+        if most_recent_conversations:
+            f.write(linesep)
+            f.write('# For your exclusion/inclusion convenience:')
+            f.write(linesep)
+            f.write(f'# The {len(most_recent_conversations)} most recently active conversation names.')
+            f.write((linesep + '# - ').join([''] + most_recent_conversations))
+
 def get(path):
     handle = config
     for key in path.split('.'):
@@ -73,6 +80,6 @@ def get(path):
 
     return handle
 
-def add_conversations(conversations):
-    include = set(config['import_messages']['by_conversation']['include']).union(conversations)
-    config['import_messages']['by_conversation']['include'] = list(include)
+def conversation_list(conversations):
+    global most_recent_conversations
+    most_recent_conversations = conversations
