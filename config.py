@@ -39,7 +39,7 @@ def defaults():
             'signal_path': str(signal_path),
             'pre_decrypt': pre_decrypt,
             'pre_copy': pre_decrypt,
-            'sqlcipher_bin': './sqlcipher/bin/sqlcipher'
+            'sqlcipher_bin': './sqlcipher/sqlcipher'
         } ,
         'last_run': 0
     }  

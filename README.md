@@ -76,22 +76,28 @@ Installation on Windows using WSL
 #### Powershell
 
 ~~~~powershell
+# Install Windows Subsystem for Linux
 wsl --install
 ~~~~
 
-#### Bash
+#### Ubuntu Shell (Bash)
 
 ~~~~bash
-# Install pip
-sudo apt-get update  
-apt-get install python3-pip  
-
 # Clone repo
+
+# Choose a directory for this script.  
+# Make sure the path does not contain any spaces! Eg:
+cd /mnt/c/users/<username>
+
 git clone https://github.com/bskp/signal-bildexport.git
 cd signal-bildexport/
 
-# Build sqlcipher
-sudo apt install libsqlite3-dev tclsh libssl-dev
+# Install build tools and build sqlcipher
+sudo apt-get update  
+sudo apt install build-essential libsqlite3-dev tclsh libssl-dev
+
+# Feel free to put sqlcipher anywhere else.Make sure to adapt
+# config.yaml (which will be generated) accordingly.
 git clone https://github.com/sqlcipher/sqlcipher.git
 cd sqlcipher/
 ./configure --enable-tempstore=yes CFLAGS="-DSQLITE_HAS_CODEC" LDFLAGS="-lcrypto -lsqlite3"
@@ -99,6 +105,7 @@ make
 
 # Install required python modules
 cd ..
+apt-get install python3-pip  
 pip install -r requirements.txt
 ~~~~
 
