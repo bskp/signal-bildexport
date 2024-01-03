@@ -96,7 +96,7 @@ cd signal-bildexport/
 sudo apt-get update  
 sudo apt install build-essential libsqlite3-dev tclsh libssl-dev
 
-# Feel free to put sqlcipher anywhere else.Make sure to adapt
+# Feel free to put sqlcipher anywhere else. Make sure to adapt
 # config.yaml (which will be generated) accordingly.
 git clone https://github.com/sqlcipher/sqlcipher.git
 cd sqlcipher/

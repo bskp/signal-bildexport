@@ -118,7 +118,7 @@ reactions = config.get('import_photos_from_messages.any_with_my_reaction')
 if reactions:
     # Get the users conversation ID
     user_id = json.loads(c.execute("select json from items where id = 'uuid_id'").fetchone()[0])['value'].rpartition('.')[0]
-    user_convo_id = c.execute(f"select id from conversations where uuid = '{user_id}'").fetchone()[0]
+    user_convo_id = c.execute(f"select id from conversations where serviceId = '{user_id}'").fetchone()[0]
 
     # add filter to messages-query
     if '*' in reactions:
