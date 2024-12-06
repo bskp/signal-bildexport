@@ -1,14 +1,20 @@
-#!/usr/bin/env python 
-
+#!/usr/bin/env python
 import json
 from pathlib import Path
 import datetime as dt
 from shutil import copyfile, move
-from pyexiv2 import Image
+
+from exiftool.exceptions import ExifToolExecuteError
+
+from files import decrypt_attachment
+
 import keyring
 import hashlib
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import unpad
+
+from exiftool import ExifToolHelper
+
 import progressbar
 import os
 import sqlite3
@@ -40,8 +46,10 @@ if not tmp_folder.exists(): tmp_folder.mkdir()
 for f in tmp_folder.iterdir():
     f.unlink()
 
+
 def tagify(value):
     return unicodedata.normalize('NFKD', value).replace(',', '')
+
 
 def slugify(value, allow_unicode=False):
     """
@@ -83,7 +91,6 @@ def safe_storage_decrypt(prefixed_encrypted: bytes):
     plaintext = cipher.decrypt(raw_cyphertext)
     return unpad(plaintext, 16).decode('ascii')
 
-
 key = safe_storage_decrypt(encrypted)
 
 if config.get('x-advanced.reuse_pre_decrypt'):
@@ -115,8 +122,9 @@ elif config.get('x-advanced.pre_decrypt'):
     db = sqlite3.connect(str(db_decrypted))
     c = db.cursor()
 
-else: 
+else:
     from pysqlcipher3 import dbapi2 as sqlcipher
+
     db = sqlcipher.connect(str(db_path))
     c = db.cursor()
 
@@ -126,7 +134,7 @@ else:
     c.execute("PRAGMA cipher_hmac_algorithm = HMAC_SHA512")
     c.execute("PRAGMA cipher_kdf_algorithm = PBKDF2_HMAC_SHA512")
 
-previous_export_timestamp = int(config.get('last_run'))
+previous_export_timestamp = dt.datetime.fromisoformat(config.get('last_run'))
 
 # Sqlite query
 
@@ -134,28 +142,29 @@ previous_export_timestamp = int(config.get('last_run'))
 rows = c.execute('select ifnull(name, profileFullName) from conversations order by active_at desc limit 50').fetchall()
 config.conversation_list([row[0] for row in rows])
 
-since = dt.datetime.fromtimestamp(previous_export_timestamp/1000).strftime('%Y-%m-%d')
+since = previous_export_timestamp.strftime('%Y-%m-%d')
 print(f'Querying Signal DB for new images since {since}... ')
 
-query = "SELECT m.json, ifnull(u.name, u.profileFullName) as user, c.name as conversation, m.body as label, m.sent_at " \
-+ "FROM messages m " \
-+ "JOIN conversations u ON m.source = u.e164 " \
-+ "JOIN conversations c ON m.conversationId = c.id " \
-+ "LEFT JOIN reactions r ON m.id = r.messageId " \
-+ "WHERE m.hasVisualMediaAttachments = 1 AND m.type = 'incoming' " \
-+ f"AND m.received_at > {previous_export_timestamp}" 
+query = "SELECT m.json, ifnull(u.name, u.profileName) as user, c.name as conversation, m.body as label, m.sent_at " \
+        + "FROM messages m " \
+        + "JOIN conversations u ON m.sourceServiceId = u.serviceId " \
+        + "JOIN conversations c ON m.conversationId = c.id " \
+        + "LEFT JOIN reactions r ON m.id = r.messageId " \
+        + "WHERE m.hasVisualMediaAttachments = 1 AND m.type = 'incoming' " \
+        + f"AND m.received_at > {int(previous_export_timestamp.timestamp() * 1000)}"
 
 # Filter by reactions
 reactions = config.get('import_photos_from_messages.any_with_my_reaction')
 if reactions:
     # Get the users conversation ID
-    user_id = json.loads(c.execute("select json from items where id = 'uuid_id'").fetchone()[0])['value'].rpartition('.')[0]
+    user_id = \
+    json.loads(c.execute("select json from items where id = 'uuid_id'").fetchone()[0])['value'].rpartition('.')[0]
     user_convo_id = c.execute(f"select id from conversations where serviceId = '{user_id}'").fetchone()[0]
 
     # add filter to messages-query
     if '*' in reactions:
         query += f" AND r.fromId = '{user_convo_id}'"
-    else: 
+    else:
         reaction_list = "','".join(reactions)
         query += f" AND r.fromId = '{user_convo_id}' AND r.emoji IN ('{reaction_list}')"
 
@@ -180,7 +189,8 @@ most_recent_message = previous_export_timestamp
 count_copied = 0
 count_present = 0
 for payload, user, conversation, label, timestamp in progressbar.progressbar(rows):
-    most_recent_message = max(most_recent_message, timestamp)
+    date = dt.datetime.fromtimestamp(timestamp // 1000)
+    most_recent_message = max(most_recent_message, date)
     attachments = json.loads(payload)['attachments']
     for index, attachment in enumerate(attachments):
         if not 'path' in attachment:
@@ -188,8 +198,7 @@ for payload, user, conversation, label, timestamp in progressbar.progressbar(row
         if attachment['contentType'] != 'image/jpeg':
             continue
 
-        date = dt.datetime.fromtimestamp(timestamp/1000)
-        filename = slugify(user) + '_' + date.replace(microsecond=0).isoformat()
+        filename = slugify(user) + '_' + date.replace(microsecond=0).isoformat().replace(':', '.')
         if len(attachments) > 1:
             filename += f'_{index + 1}'
 
@@ -199,32 +208,37 @@ for payload, user, conversation, label, timestamp in progressbar.progressbar(row
             count_present += 1
             continue
 
-        copyfile(attachments_path / attachment['path'].replace('\\', '/'), target)
+        source_path = attachments_path / attachment['path'].replace('\\', '/')
+        decrypt_attachment(attachment['size'], attachment['localKey'], source_path, target)
         count_copied += 1
-        
-        with Image(str(target)) as img:
-            description = user
-            if conversation != user:
-                description += f' in "{conversation}"'
-            if label:
-                description += f': {label}'
 
-            tags = user, 'Signal'
-            if conversation != user:
-                tags += tagify(conversation),
+        description = user
+        if conversation != user:
+            description += f' in "{conversation}"'
+        if label:
+            description += f': {label}'
 
-            exif = img.read_exif()
-            iptc = img.read_iptc()
-            exif['Exif.Photo.DateTimeOriginal'] = date.strftime('%Y:%m:%d %H:%M:%S')
-            exif['Exif.Image.Model'] = 'Signal Export'
-            exif['Exif.Image.Artist'] = user
-            exif['Exif.Image.ImageDescription'] = description
-            iptc['Iptc.Application2.Caption'] = description
-            iptc['Iptc.Application2.Keywords'] = tags
-            iptc['Iptc.Envelope.CharacterSet'] = '\x1b%G'
+        tags = user, 'Signal'
+        if conversation != user:
+            tags += tagify(conversation),
 
-            img.modify_iptc(iptc)
-            img.modify_exif(exif)
+        description = description.replace('\n', ' ')
+
+        with ExifToolHelper() as et:
+            exif = {
+                "Model": 'Signal Export',
+                "DateTimeOriginal": date.strftime('%Y:%m:%d %H:%M:%S'),
+                "Keywords": list(tags),
+                "Artist": user,
+                "Caption-Abstract": description,
+                "ImageDescription": description,
+                "CodedCharacterSet": '\x1b%G',
+            }
+            try:
+                et.set_tags([target], tags=exif, params=["-P", "-overwrite_original"])
+            except ExifToolExecuteError as e:
+                print("Error while writing metadata: ", e)
+
 
 print('Export complete.')
 
@@ -237,8 +251,7 @@ if count_copied > 0:
         for img in tmp_folder.iterdir():
             move(str(img), str(win_icloud_photos_path))
 
-
-config.config['last_run'] = dt.datetime.fromtimestamp(most_recent_message).replace(microsecond=0).isoformat()
+config.config['last_run'] = most_recent_message.isoformat()
 config.save()
 
 print(f'New images since {since}: {count_copied}')
