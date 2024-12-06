@@ -5,6 +5,10 @@ from pathlib import Path
 import datetime as dt
 from shutil import copyfile, move
 from pyexiv2 import Image
+import keyring
+import hashlib
+from Crypto.Cipher import AES
+from Crypto.Util.Padding import unpad
 import progressbar
 import os
 import sqlite3
@@ -55,13 +59,41 @@ def slugify(value, allow_unicode=False):
     value = re.sub(r'[^\w\s-]', '', value)
     return re.sub(r'[-\s]+', '-', value).strip('-_')
 
-# Read DB key and prepare decryption
-with open(signal_path / 'config.json') as f:
-    key = json.load(f)['key']
 
-if config.get('x-advanced.pre_decrypt'):
+with open(signal_path / 'config.json') as f:
+    modern_key = json.load(f)['encryptedKey']
+
+encrypted = bytes.fromhex(modern_key)
+
+
+def safe_storage_decrypt(prefixed_encrypted: bytes):
+    if not prefixed_encrypted.startswith(b'v10'):
+        raise RuntimeError(f'Unknown key version: {prefixed_encrypted[:3]}')
+    raw_cyphertext = prefixed_encrypted[3:]
+
+    # Prepare safe storage cipher
+    keychain_pw = keyring.get_password('Signal Safe Storage', 'Signal Key').encode()
+
+    # FYI: https://github.com/electron/electron/blob/4e40b49d1a1d55c97ae7853247162347b476e980/shell/browser/api/electron_api_safe_storage.cc#L118
+    # Parameters taken from:
+    # https://chromium.googlesource.com/chromium/src/+/refs/heads/main/components/os_crypt/sync/os_crypt_mac.mm#34
+    kek = hashlib.pbkdf2_hmac('sha1', keychain_pw, b'saltysalt', 1003, 128 // 8)
+
+    cipher = AES.new(kek, AES.MODE_CBC, iv=b' ' * 16)
+    plaintext = cipher.decrypt(raw_cyphertext)
+    return unpad(plaintext, 16).decode('ascii')
+
+
+key = safe_storage_decrypt(encrypted)
+
+if config.get('x-advanced.reuse_pre_decrypt'):
     db_decrypted = Path('db-decrypt.sqlite')
-    sqlcipher = config('x-advanced.sqlcipher_bin')
+    db = sqlite3.connect(str(db_decrypted))
+    c = db.cursor()
+
+elif config.get('x-advanced.pre_decrypt'):
+    db_decrypted = Path('db-decrypt.sqlite')
+    sqlcipher = config.get('x-advanced.sqlcipher_bin')
     print(f"Decrypting Signal DB...")
     if db_decrypted.exists():
         db_decrypted.unlink()
@@ -157,7 +189,7 @@ for payload, user, conversation, label, timestamp in progressbar.progressbar(row
             continue
 
         date = dt.datetime.fromtimestamp(timestamp/1000)
-        filename = slugify(user) + '_' + date.strftime('%Y-%m-%d_%H%M%S')
+        filename = slugify(user) + '_' + date.replace(microsecond=0).isoformat()
         if len(attachments) > 1:
             filename += f'_{index + 1}'
 
@@ -206,7 +238,7 @@ if count_copied > 0:
             move(str(img), str(win_icloud_photos_path))
 
 
-config.config['last_run'] = most_recent_message
+config.config['last_run'] = dt.datetime.fromtimestamp(most_recent_message).replace(microsecond=0).isoformat()
 config.save()
 
 print(f'New images since {since}: {count_copied}')
