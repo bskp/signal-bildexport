@@ -3,15 +3,11 @@ import json
 from pathlib import Path
 import datetime as dt
 from shutil import copyfile, move
+import subprocess
 
 from exiftool.exceptions import ExifToolExecuteError
 
-from files import decrypt_attachment
-
-import keyring
-import hashlib
-from Crypto.Cipher import AES
-from Crypto.Util.Padding import unpad
+from crypto import decrypt_attachment, safe_storage_decrypt
 
 from exiftool import ExifToolHelper
 
@@ -71,27 +67,7 @@ def slugify(value, allow_unicode=False):
 with open(signal_path / 'config.json') as f:
     modern_key = json.load(f)['encryptedKey']
 
-encrypted = bytes.fromhex(modern_key)
-
-
-def safe_storage_decrypt(prefixed_encrypted: bytes):
-    if not prefixed_encrypted.startswith(b'v10'):
-        raise RuntimeError(f'Unknown key version: {prefixed_encrypted[:3]}')
-    raw_cyphertext = prefixed_encrypted[3:]
-
-    # Prepare safe storage cipher
-    keychain_pw = keyring.get_password('Signal Safe Storage', 'Signal Key').encode()
-
-    # FYI: https://github.com/electron/electron/blob/4e40b49d1a1d55c97ae7853247162347b476e980/shell/browser/api/electron_api_safe_storage.cc#L118
-    # Parameters taken from:
-    # https://chromium.googlesource.com/chromium/src/+/refs/heads/main/components/os_crypt/sync/os_crypt_mac.mm#34
-    kek = hashlib.pbkdf2_hmac('sha1', keychain_pw, b'saltysalt', 1003, 128 // 8)
-
-    cipher = AES.new(kek, AES.MODE_CBC, iv=b' ' * 16)
-    plaintext = cipher.decrypt(raw_cyphertext)
-    return unpad(plaintext, 16).decode('ascii')
-
-key = safe_storage_decrypt(encrypted)
+key = safe_storage_decrypt(bytes.fromhex(modern_key))
 
 if config.get('x-advanced.reuse_pre_decrypt'):
     db_decrypted = Path('db-decrypt.sqlite')
@@ -145,13 +121,14 @@ config.conversation_list([row[0] for row in rows])
 since = previous_export_timestamp.strftime('%Y-%m-%d')
 print(f'Querying Signal DB for new images since {since}... ')
 
-query = "SELECT m.json, ifnull(u.name, u.profileName) as user, c.name as conversation, m.body as label, m.sent_at " \
+query = "SELECT m.json, ifnull(u.name, u.profileName) as user, c.name as conversation, m.body as label, m.sent_at, a.path as path, a.size as size, a.contentType as content_type, a.localKey as local_key, a.orderInMessage as idx " \
         + "FROM messages m " \
         + "JOIN conversations u ON m.sourceServiceId = u.serviceId " \
         + "JOIN conversations c ON m.conversationId = c.id " \
+        + "JOIN message_attachments a ON m.id = a.messageId " \
         + "LEFT JOIN reactions r ON m.id = r.messageId " \
         + "WHERE m.hasVisualMediaAttachments = 1 AND m.type = 'incoming' " \
-        + f"AND m.received_at > {int(previous_export_timestamp.timestamp() * 1000)}"
+        + f"AND m.sent_at > {int(previous_export_timestamp.timestamp() * 1000)}"
 
 # Filter by reactions
 reactions = config.get('import_photos_from_messages.any_with_my_reaction')
@@ -188,62 +165,63 @@ most_recent_message = previous_export_timestamp
 
 count_copied = 0
 count_present = 0
-for payload, user, conversation, label, timestamp in progressbar.progressbar(rows):
+for payload, user, conversation, label, timestamp, path, size, content_type, local_key, idx in progressbar.progressbar(rows):
     date = dt.datetime.fromtimestamp(timestamp // 1000)
     most_recent_message = max(most_recent_message, date)
-    attachments = json.loads(payload)['attachments']
-    for index, attachment in enumerate(attachments):
-        if not 'path' in attachment:
-            continue
-        if attachment['contentType'] != 'image/jpeg':
-            continue
+    if not path:
+        continue
+    if content_type != 'image/jpeg':
+        continue
 
-        filename = slugify(user) + '_' + date.replace(microsecond=0).isoformat().replace(':', '.')
-        if len(attachments) > 1:
-            filename += f'_{index + 1}'
+    filename = slugify(user) + '_' + date.replace(microsecond=0).isoformat().replace(':', '.')
+    filename += f'_{idx + 1}'
 
-        target = tmp_folder / (filename + '.jpg')
+    target = tmp_folder / (filename + '.jpg')
 
-        if platform == 'linux' and (win_icloud_photos_path / target.name).exists():
-            count_present += 1
-            continue
+    if platform == 'linux' and (win_icloud_photos_path / target.name).exists():
+        count_present += 1
+        continue
 
-        source_path = attachments_path / attachment['path'].replace('\\', '/')
-        decrypt_attachment(attachment['size'], attachment['localKey'], source_path, target)
-        count_copied += 1
+    source_path = attachments_path / path.replace('\\', '/')
+    decrypt_attachment(size, local_key, source_path, target)
+    count_copied += 1
 
-        description = user
-        if conversation != user:
-            description += f' in "{conversation}"'
-        if label:
-            description += f': {label}'
+    if conversation is None:
+        conversation = user
 
-        tags = user, 'Signal'
-        if conversation != user:
-            tags += tagify(conversation),
+    description = user
+    if conversation != user:
+        description += f' in "{conversation}"'
+    if label:
+        description += f': {label}'
 
-        description = description.replace('\n', ' ')
+    tags = user, 'Signal'
+    if conversation != user:
+        tags += tagify(conversation),
 
-        with ExifToolHelper() as et:
-            exif = {
-                "Model": 'Signal Export',
-                "DateTimeOriginal": date.strftime('%Y:%m:%d %H:%M:%S'),
-                "Keywords": list(tags),
-                "Artist": user,
-                "Caption-Abstract": description,
-                "ImageDescription": description,
-                "CodedCharacterSet": '\x1b%G',
-            }
-            try:
-                et.set_tags([target], tags=exif, params=["-P", "-overwrite_original"])
-            except ExifToolExecuteError as e:
-                print("Error while writing metadata: ", e)
+    description = description.replace('\n', ' ')
+
+    with ExifToolHelper() as et:
+        exif = {
+            "Model": 'Signal Export',
+            "DateTimeOriginal": date.strftime('%Y:%m:%d %H:%M:%S'),
+            "Keywords": list(tags),
+            "Artist": user,
+            "Caption-Abstract": description,
+            "ImageDescription": description,
+            "CodedCharacterSet": '\x1b%G',
+        }
+        try:
+            et.set_tags([target], tags=exif, params=["-P", "-overwrite_original"])
+        except ExifToolExecuteError as e:
+            print("Error while writing metadata: ", e)
 
 
 print('Export complete.')
 
 if count_copied > 0:
     if platform == 'darwin':
+        subprocess.run(["open", tmp_folder])
         print()
         print('Please drag the tmp-folder on Photos\'s app icon to trigger the import.')
 
