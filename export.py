@@ -4,6 +4,7 @@ from pathlib import Path
 import datetime as dt
 from shutil import copyfile, move
 import subprocess
+import shlex
 
 from exiftool.exceptions import ExifToolExecuteError
 
@@ -86,7 +87,7 @@ elif config.get('x-advanced.pre_decrypt'):
         f"ATTACH DATABASE '{db_decrypted}' AS plaintext KEY '';"
         f"SELECT sqlcipher_export('plaintext');"
         f"DETACH DATABASE plaintext;"
-        f'" | {sqlcipher} {db_path}'
+        f'" | {shlex.quote(str(sqlcipher))} {shlex.quote(str(db_path))}'
     )
     bar = progressbar.ProgressBar(max_value=progressbar.UnknownLength, redirect_stdout=True)
     bar.update()
@@ -110,13 +111,14 @@ else:
     c.execute("PRAGMA cipher_hmac_algorithm = HMAC_SHA512")
     c.execute("PRAGMA cipher_kdf_algorithm = PBKDF2_HMAC_SHA512")
 
-previous_export_timestamp = dt.datetime.fromisoformat(config.get('last_run'))
+last_run = config.get('last_run')
+previous_export_timestamp = dt.datetime.fromisoformat(last_run) if last_run else dt.datetime(1970, 1, 2)
 
 # Sqlite query
 
 # List all conversation names
 rows = c.execute('select ifnull(name, profileFullName) from conversations order by active_at desc limit 50').fetchall()
-config.conversation_list([row[0] for row in rows])
+config.conversation_list([row[0] for row in rows if row[0]])
 
 since = previous_export_timestamp.strftime('%Y-%m-%d')
 print(f'Querying Signal DB for new images since {since}... ')
@@ -165,8 +167,10 @@ most_recent_message = previous_export_timestamp
 
 count_copied = 0
 count_present = 0
+et = ExifToolHelper()
 for payload, user, conversation, label, timestamp, path, size, content_type, local_key, idx in progressbar.progressbar(rows):
     date = dt.datetime.fromtimestamp(timestamp // 1000)
+    user = user or 'Unknown'
     most_recent_message = max(most_recent_message, date)
     if not path:
         continue
@@ -201,21 +205,21 @@ for payload, user, conversation, label, timestamp, path, size, content_type, loc
 
     description = description.replace('\n', ' ')
 
-    with ExifToolHelper() as et:
-        exif = {
-            "Model": 'Signal Export',
-            "DateTimeOriginal": date.strftime('%Y:%m:%d %H:%M:%S'),
-            "Keywords": list(tags),
-            "Artist": user,
-            "Caption-Abstract": description,
-            "ImageDescription": description,
-            "CodedCharacterSet": '\x1b%G',
-        }
-        try:
-            et.set_tags([target], tags=exif, params=["-P", "-overwrite_original"])
-        except ExifToolExecuteError as e:
-            print("Error while writing metadata: ", e)
+    exif = {
+        "Model": 'Signal Export',
+        "DateTimeOriginal": date.strftime('%Y:%m:%d %H:%M:%S'),
+        "Keywords": list(tags),
+        "Artist": user,
+        "Caption-Abstract": description,
+        "ImageDescription": description,
+        "CodedCharacterSet": '\x1b%G',
+    }
+    try:
+        et.set_tags([target], tags=exif, params=["-P", "-overwrite_original"])
+    except ExifToolExecuteError as e:
+        print("Error while writing metadata: ", e)
 
+et.terminate()
 
 print('Export complete.')
 
