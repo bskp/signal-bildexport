@@ -1,3 +1,6 @@
 .DS_Store
 config.yaml
 tmp
+db-decrypt.sqlite
+.venv/
+__pycache__/
